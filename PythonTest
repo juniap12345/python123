@@ -1,0 +1,200 @@
+QUESTION 1:
+
+# main.py
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import psycopg2
+from pymongo import MongoClient
+
+app = FastAPI()
+
+# Connect to PostgreSQL database
+postgres_conn = psycopg2.connect(
+    dbname='your_postgresql_db',
+    user='your_postgresql_user',
+    password='your_postgresql_password',
+    host='your_postgresql_host',
+    port='your_postgresql_port'
+)
+postgres_cursor = postgres_conn.cursor()
+
+# Connect to MongoDB
+mongo_client = MongoClient('your_mongodb_connection_string')
+mongo_db = mongo_client['your_mongodb_db']
+mongo_collection = mongo_db['profile_pictures']
+
+# Models
+class UserRegistration(BaseModel):
+    first_name: str
+    password: str
+    email: str
+    phone: str
+
+class UserProfile(BaseModel):
+    full_name: str
+    email: str
+    phone: str
+
+# Routes
+@app.post('/register')
+def register_user(user: UserRegistration):
+    # Check if email already exists in PostgreSQL
+    postgres_cursor.execute("SELECT email FROM users WHERE email = %s", (user.email,))
+    existing_email = postgres_cursor.fetchone()
+    if existing_email:
+        raise HTTPException(status_code=400, detail='Email already exists')
+
+    # Insert user details into PostgreSQL
+    postgres_cursor.execute(
+        "INSERT INTO users (first_name, password, email, phone) VALUES (%s, %s, %s, %s)",
+        (user.first_name, user.password, user.email, user.phone)
+    )
+    postgres_conn.commit()
+
+    return {'message': 'User registered successfully'}
+
+@app.get('/users/{email}')
+def get_user(email: str):
+    postgres_cursor.execute("SELECT first_name, email, phone FROM users WHERE email = %s", (email,))
+    user_details = postgres_cursor.fetchone()
+
+    if not user_details:
+        raise HTTPException(status_code=404, detail='User not found')
+
+    full_name, email, phone = user_details
+
+    return {'full_name': full_name, 'email': email, 'phone': phone}
+
+@app.post('/profile_picture')
+def upload_profile_picture(file):
+
+    file_id = mongo_collection.insert_one(file).inserted_id
+
+    return {'file_id': str(file_id)}
+
+# HTML and View
+html_content = """
+<html>
+<body>
+    <h1>User Registration</h1>
+    <form action="/register" method="post">
+        <label for="first_name">First Name:</label>
+        <input type="text" id="first_name" name="first_name"><br>
+        <label for="password">Password:</label>
+        <input type="password" id="password" name="password"><br>
+        <label for="email">Email:</label>
+        <input type="text" id="email" name="email"><br>
+        <label for="phone">Phone:</label>
+        <input type="text" id="phone" name="phone"><br>
+        <input type="submit" value="Register">
+    </form>
+</body>
+</html>
+"""
+
+@app.get('/register_form')
+def registration_form():
+    return HTMLResponse(content=html_content, status_code=200)
+
+if __name__ == '__main__':
+    import uvicorn
+    uvicorn.run(app, host='0.0.0.0', port=8000)
+
+
+QUESTION 2:
+
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import psycopg2
+
+# PostgreSQL configuration
+POSTGRES_HOST = "localhost"
+POSTGRES_PORT = 5432
+POSTGRES_USER = "your_postgres_user"
+POSTGRES_PASSWORD = "your_postgres_password"
+POSTGRES_DB = "your_postgres_db"
+
+app = FastAPI()
+
+# PostgreSQL connection
+postgres_conn = psycopg2.connect(
+    host=POSTGRES_HOST,
+    port=POSTGRES_PORT,
+    user=POSTGRES_USER,
+    password=POSTGRES_PASSWORD,
+    database=POSTGRES_DB,
+)
+
+
+# User registration model
+class UserRegistration(BaseModel):
+    full_name: str
+    email: str
+    password: str
+    phone: str
+    profile_picture: str
+
+
+# Register a user
+@app.post("/register")
+def register_user(user: UserRegistration):
+    # Check if the email already exists
+    postgres_cursor = postgres_conn.cursor()
+    postgres_cursor.execute("SELECT * FROM users WHERE email = %s", (user.email,))
+    if postgres_cursor.fetchone():
+        raise HTTPException(status_code=400, detail="Email already exists")
+
+    # Check if the phone already exists
+    postgres_cursor.execute("SELECT * FROM users WHERE phone = %s", (user.phone,))
+    if postgres_cursor.fetchone():
+        raise HTTPException(status_code=400, detail="Phone already exists")
+
+    # Save user details to PostgreSQL
+    postgres_cursor.execute(
+        "INSERT INTO users (full_name, email, password, phone) VALUES (%s, %s, %s, %s) RETURNING user_id",
+        (user.full_name, user.email, user.password, user.phone),
+    )
+    user_id = postgres_cursor.fetchone()[0]
+    postgres_conn.commit()
+
+    # Save profile picture to the Profile table
+    postgres_cursor.execute(
+        "INSERT INTO profile (user_id, profile_picture) VALUES (%s, %s)",
+        (user_id, user.profile_picture),
+    )
+    postgres_conn.commit()
+
+    return {"message": "User registered successfully"}
+
+
+# Get registered user details
+@app.get("/users/{email}")
+def get_user(email: str):
+    # Retrieve user details from the Users table
+    postgres_cursor = postgres_conn.cursor()
+    postgres_cursor.execute(
+        """
+        SELECT u.full_name, u.email, u.phone, p.profile_picture
+        FROM users AS u
+        JOIN profile AS p ON u.user_id = p.user_id
+        WHERE u.email = %s
+        """,
+        (email,),
+    )
+    user = postgres_cursor.fetchone()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return {
+        "full_name": user[0],
+        "email": user[1],
+        "phone": user[2],
+        "profile_picture": user[3],
+    }
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="localhost", port=8000)
+
+
+
